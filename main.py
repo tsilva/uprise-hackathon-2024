@@ -11,6 +11,15 @@ import re
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+# Directory constants
+INPUT_DIR = Path("input")
+OUTPUT_DIR = Path("output")
+PLOTS_DIR = Path("plots")
+
+# Ensure output directories exist
+OUTPUT_DIR.mkdir(exist_ok=True)
+PLOTS_DIR.mkdir(exist_ok=True)
+
 with open("config/lab_names.json", "r") as f: LAB_NAMES = json.load(f)
 with open("config/lab_methods.json", "r") as f: LAB_METHODS = json.load(f)
 with open("config/lab_units.json", "r") as f: LAB_UNITS = json.load(f)
@@ -85,7 +94,7 @@ def extract_pdf_pages(pdf_path):
     image_paths = []
     
     for i, image in enumerate(images, start=1):
-        image_path = Path((pdf_path.parent / f"{base_name}.{i:03d}.png").replace("input", "output"))
+        image_path = OUTPUT_DIR / f"{base_name}.{i:03d}.png"
         image.save(image_path, "PNG")
         image_paths.append(image_path)
     
@@ -153,10 +162,10 @@ def process_pdf(pdf_path, client):
     
     return all_labs
 
-def merge_csv_files(data_dir):
+def merge_csv_files():
     """Merge all CSV files in directory into a single sorted file"""
     # Find all CSV files, excluding page-specific CSVs using regex
-    csv_files = [f for f in Path(data_dir).glob("**/*.csv") 
+    csv_files = [f for f in OUTPUT_DIR.glob("**/*.csv") 
                  if not re.search(r'\.\d{3}\.csv$', str(f))]
     print(f"\nMerging {len(csv_files)} CSV files")
     
@@ -182,7 +191,7 @@ def merge_csv_files(data_dir):
     )
     
     # Export merged results
-    output_path = Path(data_dir) / "merged_results.csv"
+    output_path = OUTPUT_DIR / "merged_results.csv"
     merged_df.to_csv(output_path, index=False, sep=';')
     print(f"Saved merged results to {output_path}")
     
@@ -198,7 +207,7 @@ def merge_csv_files(data_dir):
     }
     
     for key, values in unique_values.items():
-        json_path = Path(data_dir) / f"unique_{key}.json"
+        json_path = OUTPUT_DIR / f"unique_{key}.json"
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(values, f, ensure_ascii=False, indent=2)
         print(f"Saved unique {key} to {json_path}")
@@ -217,30 +226,24 @@ def create_lab_test_plot(df_test, lab_name, output_dir):
     plt.close()
     print(f"Saved plot for {lab_name} to {output_file}")
 
-def plot_all_lab_tests(data_dir):
+def plot_all_lab_tests():
     """Generate plots for all lab tests from merged results"""
     # Read merged results
-    input_path = Path(data_dir) / "merged_results.csv"
+    input_path = OUTPUT_DIR / "merged_results.csv"
     df = pd.read_csv(input_path, sep=';')
     
     # Convert date column
     df['date'] = pd.to_datetime(df['date'])
     
-    # Create output directory
-    output_dir = Path("plots")
-    output_dir.mkdir(exist_ok=True)
-    
     # Process each unique lab test
     for lab_name in df['lab_name'].unique():
         print(f"Processing {lab_name}")
         df_test = df[df['lab_name'] == lab_name]
-        create_lab_test_plot(df_test, lab_name, output_dir)
+        create_lab_test_plot(df_test, lab_name, PLOTS_DIR)
 
 if __name__ == "__main__":
-    input_dir = Path("input")
-
     # Process each PDF file
-    pdf_files = list(input_dir.glob("*.pdf"))
+    pdf_files = list(INPUT_DIR.glob("*.pdf"))
     client = anthropic.Anthropic()
     
     for pdf_file in pdf_files:
@@ -248,9 +251,9 @@ if __name__ == "__main__":
         results = process_pdf(pdf_file, client)
     
     # Merge all results after processing all PDFs
-    merge_csv_files("output")
+    merge_csv_files()
     
     # Generate plots as final step
     print("\nGenerating plots...")
-    plot_all_lab_tests(input_dir)
+    plot_all_lab_tests()
     print("Processing complete!")
