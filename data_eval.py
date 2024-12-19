@@ -1,8 +1,14 @@
+import os
 import re
+import sys
 import json
 import pandas as pd
 
-DATASET_DIR = "datasets/Synthea27Nj_5.4"
+DATASET_DIRS = {
+    "normal": "datasets/Synthea27Nj_5.4",
+    "damaged": "datasets/Synthea27Nj_5.4_damaged",
+    "healed": "datasets/Synthea27Nj_5.4_healed"
+}
 
 def load_json(file_path):
     with open(file_path, 'r') as f: data = json.load(f)
@@ -11,8 +17,8 @@ def load_json(file_path):
 def save_json(file_path, data):
     with open(file_path, 'w') as f: json.dump(data, f, indent=4)
 
-def load_table(table_name):
-    table_path = f"{DATASET_DIR}/{table_name}.csv"
+def load_table(dataset_dir, table_name):
+    table_path = f"{dataset_dir}/{table_name}.csv"
     return pd.read_csv(table_path)
 
 def set_column_eval(schema_quality, table_name, column_name, eval_name, eval_value):
@@ -26,33 +32,33 @@ def set_column_eval(schema_quality, table_name, column_name, eval_name, eval_val
     table["columns"] = table_columns
     schema_quality[table_name] = table
 
-def eval_primary_key_uniqueness(schema, schema_quality):
+def eval_primary_key_uniqueness(dataset_dir, schema, schema_quality):
     for table_name, table_data in schema.items():
-        df = load_table(table_name)
+        df = load_table(dataset_dir, table_name)
         for column_name, column_data in table_data["columns"].items():
             if not column_data.get("primary_key", False): continue
             values = df[column_name].values
             primary_key_uniqueness_score = len(set(values)) / len(values)
             set_column_eval(schema_quality, table_name, column_name, "primary_key_uniqueness_score", primary_key_uniqueness_score)
 
-def eval_foreign_key_consistency(schema, schema_quality):
+def eval_foreign_key_consistency(dataset_dir, schema, schema_quality):
     for table_name, table_data in schema.items():
-        df = load_table(table_name)
+        df = load_table(dataset_dir, table_name)
         for column_name, column_data in table_data["columns"].items():
             foreign_key = column_data.get("foreign_key")
             if not foreign_key: continue
             values = df[column_name].values
             foreign_key_table = foreign_key["table"]
             foreign_key_column = foreign_key["column"]
-            foreign_table = load_table(foreign_key_table)
+            foreign_table = load_table(dataset_dir, foreign_key_table)
             foreign_values = foreign_table[foreign_key_column].values
             matches = [value for value in values if value in foreign_values]
             foreign_key_consistency_score = len(matches) / len(values)
             set_column_eval(schema_quality, table_name, column_name, "foreign_key_consistency_score", foreign_key_consistency_score)
 
-def eval_regex_accuracy(schema, schema_quality):
+def eval_regex_accuracy(dataset_dir, schema, schema_quality):
     for table_name, table_data in schema.items():
-        df = load_table(table_name)
+        df = load_table(dataset_dir, table_name)
 
         for column_name, column_data in table_data["columns"].items():
             if not 'regex' in column_data: continue
@@ -120,15 +126,24 @@ def calculate_global_scores(schema_quality):
 
     return global_scores
 
-# Run evals and save results
-schema = load_json('schema/schema.json')
-schema_quality = {}
-eval_regex_accuracy(schema, schema_quality)
-eval_primary_key_uniqueness(schema, schema_quality)
-eval_foreign_key_consistency(schema, schema_quality)
-aggregate_evals(schema_quality)
-save_json('schema/schema_quality.json', schema_quality)
+def eval_dataset(dataset_dir):
+    if not os.path.exists(dataset_dir): return
+    print(f"Evaluating dataset: {dataset_dir}")
 
-# Print eval scores
-global_scores = calculate_global_scores(schema_quality)
-for metric, score in global_scores.items(): print(f"{metric}: {score * 100:.2f}%")
+    # Run evals and save results
+    schema = load_json('schema/schema.json')
+    schema_quality = {}
+    eval_regex_accuracy(dataset_dir, schema, schema_quality)
+    eval_primary_key_uniqueness(dataset_dir, schema, schema_quality)
+    eval_foreign_key_consistency(dataset_dir, schema, schema_quality)
+    aggregate_evals(schema_quality)
+    save_json('schema/schema_quality.json', schema_quality)
+
+    # Print eval scores
+    global_scores = calculate_global_scores(schema_quality)
+    for metric, score in global_scores.items(): print(f"{metric}: {score * 100:.2f}%")
+
+if __name__ == "__main__":
+    dataset_types = [sys.argv[1]] if len(sys.argv) > 1 else DATASET_DIRS.keys()
+    dataset_dirs = [DATASET_DIRS[dataset_type] for dataset_type in dataset_types]
+    for dataset_dir in dataset_dirs: eval_dataset(dataset_dir)
