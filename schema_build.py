@@ -77,16 +77,13 @@ TABLE_SCHEMA_TOOL= {
     }
 }
 
-class MasterSchemaGenerator:
-    def __init__(self):
-        self.client = anthropic.Anthropic()
-        
-    def load_all_schemas(self, schema_dir: Path) -> List[Dict]:
-        return [json.load(open(f)) for f in schema_dir.glob("*.json")]
-    
-    def generate_master_schema(self, table_schemas: List[Dict]) -> Dict:
-        all_tables_schema = {s["table_name"]: s for s in table_schemas if s.get('record_count', 0) > 0}
-        system_prompt = f"""You are a specialized database expert focusing on healthcare data models. Your task is to analyze database schemas and create comprehensive documentation for specified tables.
+def load_all_schemas(schema_dir: Path) -> List[Dict]:
+    return [json.load(open(f)) for f in schema_dir.glob("*.json")]
+
+def generate_master_schema(table_schemas: List[Dict]) -> Dict:
+    client = anthropic.Anthropic()
+    all_tables_schema = {s["table_name"]: s for s in table_schemas if s.get('record_count', 0) > 0}
+    system_prompt = f"""You are a specialized database expert focusing on healthcare data models. Your task is to analyze database schemas and create comprehensive documentation for specified tables.
 
 Schema context: {json.dumps(all_tables_schema, indent=2)}
 
@@ -99,51 +96,52 @@ Requirements:
 
 Use the document_schema tool to provide your analysis."""
 
-        processed_tables = {}
-        all_table_names = list(all_tables_schema.keys())
-        pending_table_names = list(all_table_names)
-        while pending_table_names:
-            chunk = pending_table_names[:4]
-            message = self.client.messages.create(
-                model=MODEL_ID,
-                max_tokens=8192,
-                temperature=0,
-                system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": f"Generate documentation for: {', '.join(chunk)}"}],
-                tools=[TABLE_SCHEMA_TOOL]
-            )
+    processed_tables = {}
+    all_table_names = list(all_tables_schema.keys())
+    pending_table_names = list(all_table_names)
+    
+    while pending_table_names:
+        chunk = pending_table_names[:4]
+        message = client.messages.create(
+            model=MODEL_ID,
+            max_tokens=8192,
+            temperature=0,
+            system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": f"Generate documentation for: {', '.join(chunk)}"}],
+            tools=[TABLE_SCHEMA_TOOL]
+        )
+        
+        for content in message.content:
+            if not hasattr(content, 'input'): continue
+            generated_table_schemas = content.input["tables"]
+            break
+        
+        processed_table_names = list(generated_table_schemas.keys())
+        pending_table_names = list(set(pending_table_names) - set(processed_table_names))
+        print(f"Processed tables: {processed_table_names}")
+        print(f"Pending tables: {pending_table_names}")
+
+        for table_name, generated_table_schema in generated_table_schemas.items():
+            original_table_schema = all_tables_schema[table_name]
             
-            for content in message.content:
-                if not hasattr(content, 'input'): continue
-                generated_table_schemas = content.input["tables"]
-                break
-            
-            processed_table_names = list(generated_table_schemas.keys())
-            pending_table_names = list(set(pending_table_names) - set(processed_table_names))
-            print(f"Processed tables: {processed_table_names}")
-            print(f"Pending tables: {pending_table_names}")
+            processed_columns = {}
+            for column_name, original_column in original_table_schema["columns"].items():
+                generated_column = generated_table_schema["columns"].get(column_name, {})
+                processed_column = {**original_column, **generated_column}
+                processed_columns[column_name] = processed_column
 
-            for table_name, generated_table_schema in generated_table_schemas.items():
-                original_table_schema = all_tables_schema[table_name]
-                
-                processed_columns = {}
-                for column_name, original_column in original_table_schema["columns"].items():
-                    generated_column = generated_table_schema["columns"].get(column_name, {})
-                    processed_column = {**original_column, **generated_column}
-                    processed_columns[column_name] = processed_column
+            processed_tables[table_name] = {
+                **original_table_schema,
+                **generated_table_schema,
+                "columns": processed_columns
+            }
 
-                processed_tables[table_name] = {
-                    **original_table_schema,
-                    **generated_table_schema,
-                    "columns" : processed_columns
-                }
+    return processed_tables
 
-        return processed_tables
-
-    def save_master_schema(self, documentation: Dict, output_path: Path):
-        """Save the master schema documentation to a JSON file"""
-        with open(output_path, 'w') as f:
-            json.dump(documentation, f, indent=2)
+def save_master_schema(documentation: Dict, output_path: Path):
+    """Save the master schema documentation to a JSON file"""
+    with open(output_path, 'w') as f:
+        json.dump(documentation, f, indent=2)
 
 def is_numeric(value: str) -> bool:
     """Check if a string value can be converted to a number."""
@@ -317,21 +315,19 @@ def build_table_schema():
         print(f"Created table schema: {json_path}")
 
 def build_master_schema():
-    generator = MasterSchemaGenerator()
-    
     # Setup paths
     schema_dir = Path("schema/tables")
     output_file = Path("schema/schema.json")
     
     print("Loading schema files...")
-    table_schemas = generator.load_all_schemas(schema_dir)
+    table_schemas = load_all_schemas(schema_dir)
     print(f"Loaded {len(table_schemas)} schema files")
     
     print("\nGenerating master schema...")
-    master_schema = generator.generate_master_schema(table_schemas)
+    master_schema = generate_master_schema(table_schemas)
     
     print("\nSaving master schema...")
-    generator.save_master_schema(master_schema, output_file)
+    save_master_schema(master_schema, output_file)
     print(f"\nMaster schema saved to {output_file}")
 
 if __name__ == "__main__":

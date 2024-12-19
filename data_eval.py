@@ -1,76 +1,88 @@
+import re
 import json
-import shutil
-from pathlib import Path
-from typing import Dict, Any
+import pandas as pd
 
-# [x] - calculates percentage of filled fields
-# [x] - calculates percentage of correct primary key values
-# [ ] - calculates percentage of valid foreign key integrity
-# [ ] - calculates the number of fields that match their data type and regex
-# [ ] - calculate final score
-# would be nice: check if values are semantically correct
+DATASET_DIR = "datasets/Synthea27Nj_5.4"
 
-#!completeness: percentage of non-missing values
-#consistency: percentage of field that match same data type, then regex
-#uniqueness: duplicate rows
-#redundancy: redundant data detection
-#accuracy: are values faithful to ground truth
+def load_json(file_path):
+    with open(file_path, 'r') as f: data = json.load(f)
+    return data
 
-def load_table(table_name: str) -> List[Dict[str, Any]]:
-    datasets_dir = "datasets/Synthea27Nj_5.4"
-    table_file = Path(__file__).parent / datasets_dir / f'{table_name}.csv'
-    with open(table_file, 'r') as f:
-        return json.load(f)
+def save_json(file_path, data):
+    with open(file_path, 'w') as f: json.dump(data, f, indent=4)
 
-def load_json_file(filepath: str) -> Dict[str, Any]:
-    with open(filepath, 'r') as f:
-        return json.load(f)
+def load_table(table_name):
+    table_path = f"{DATASET_DIR}/{table_name}.csv"
+    return pd.read_csv(table_path)
 
-def calculate_column_quality(table_name, source_column_data, column_data: Dict[str, Any]):
-    column_data["data_quality"] = {
-        "non_empty_percentage" : source_column_data["non_empty_percentage"]
-    } 
-    if column_data.get("primary_key"):
-        column_data["data_quality"]["primary_key_uniqueness_percentage"] = source_column_data["unique_values_percentage"]
+def set_column_eval(schema_quality, table_name, column_name, eval_name, eval_value):
+    table = schema_quality.get(table_name, {})
+    table_columns = table.get("columns", {})
+    column = table_columns.get(column_name, {})
+    column_evals = column.get("evals", {})
+    column_evals[eval_name] = eval_value
+    column["evals"] = column_evals
+    table_columns[column_name] = column
+    table["columns"] = table_columns
+    schema_quality[table_name] = table
+
+def eval_regex_accuracy(schema, schema_quality):
+    for table_name, table_data in schema.items():
+        df = load_table(table_name)
+
+        for column_name, column_data in table_data["columns"].items():
+            if not 'regex' in column_data: continue
+
+            regex = column_data['regex']
+            compiled_pattern = re.compile(regex)
+
+            values = df[column_name].values
+            mismatches = [value for value in values if not compiled_pattern.fullmatch(str(value))]
+
+            regex_accuracy = 1.0 - len(mismatches) / len(values)
+            set_column_eval(schema_quality, table_name, column_name, "regex_accuracy", regex_accuracy)
+
+def calculate_table_evals(schema_quality):
+    def _calculate_table_evals(table_data):
+        """Calculate aggregate evaluations for a table from its column evaluations."""
+        if not table_data.get("columns"):
+            return {}
         
-    if column_data.get("foreign_key"):
-        foreign_key = column_data["foreign_key"]
-        foreign_table_name = foreign_key["table"]
-        foreign_column_name = foreign_key["column"]
-        table = load_table(table_name)
-        foreign_table = load_table(foreign_table_name)
-        foreign_key_integrity_percentage = sum([1 for row in table if row[column_name] in foreign_table[foreign_column_name]]) / len(table)
-        column_data["data_quality"]["primary_key_uniqueness_percentage"] = foreign_key_integrity_percentage
+        # Collect all column evals
+        all_metrics = {}
+        for column_data in table_data["columns"].values():
+            if "evals" in column_data:
+                for metric, value in column_data["evals"].items():
+                    if metric not in all_metrics:
+                        all_metrics[metric] = []
+                    all_metrics[metric].append(value)
+        
+        # Calculate averages for each metric
+        aggregates = {}
+        for metric, values in all_metrics.items():
+            if values:  # Only calculate if we have values
+                aggregates[metric] = sum(values) / len(values)
+        
+        score = sum(aggregates.values()) / len(aggregates) if aggregates else 1.0
+        aggregates["score"] = score
 
-def calculate_table_quality(table_name, table_data: Dict[str, Any]):
-    table_data["data_quality"] = {
-        "non_empty_percentage": sum([column["data_quality"]["non_empty_percentage"] for column in table_data["columns"].values()]) / len(table_data["columns"]),
-        "primary_key_uniqueness_percentage": sum([column["data_quality"]["primary_key_uniqueness_percentage"] for column in table_data["columns"].values() if column.get("data_quality", {}).get("primary_key_uniqueness_percentage") is not None]) / len([column for column in table_data["columns"].values() if column.get("data_quality", {}).get("primary_key_uniqueness_percentage") is not None]),
-        "foreign_key_integrity_percentage" : sum([column["data_quality"]["foreign_key_integrity_percentage"] for column in table_data["columns"].values() if column.get("data_quality", {}).get("foreign_key_integrity_percentage") is not None]) / len([column for column in table_data["columns"].values() if column.get("data_quality", {}).get("foreign_key_integrity_percentage") is not None])
-    }
-
-def generate_quality_schema():
-    schema_dir = Path(__file__).parent / 'schema'
-    schema_file = schema_dir / 'schema.json'
-    output_file = schema_dir / 'schema_quality.json'
-    shutil.copy(schema_file, output_file)
+        return aggregates
     
-    # Load original schema
-    schema_data = load_json_file(schema_file)
-    output_data = load_json_file(output_file)
+    for table_name, table_data in schema_quality.items():
+        table_evals = _calculate_table_evals(table_data)
+        schema_quality[table_name]["evals"] = table_evals
 
-    for table_name, table_data in schema_data.items():
-        table_file = schema_dir / 'tables' / f'{table_name}.json'
-        table_data = load_json_file(table_file)
-        for column, column_data in table_data.get('fields', {}).items():
-            target_column_data = output_data[table_name]['columns'][column]
-            calculate_column_quality(column_data, target_column_data)
-        target_table = output_data[table_name]
-        calculate_table_quality(target_table)
-        
-    # Save quality schema
-    with open(output_file, 'w') as f:
-        json.dump(output_data, f, indent=2)
+def calculate_final_score(schema_quality):
+    final_score = 0
+    for _, table_data in schema_quality.items(): final_score += table_data["evals"]["score"]
+    final_score /= len(schema_quality)
+    return final_score
 
-if __name__ == '__main__':
-    generate_quality_schema()
+schema = load_json('schema/schema.json')
+schema_quality = {}
+eval_regex_accuracy(schema, schema_quality)
+calculate_table_evals(schema_quality)
+save_json('schema/schema_quality.json', schema_quality)
+
+final_score = calculate_final_score(schema_quality)
+print(f"Eval score: {final_score * 100:.2f}%")
