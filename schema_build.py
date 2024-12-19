@@ -2,6 +2,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import os
+import random
 import csv
 import json
 from pathlib import Path
@@ -106,8 +107,8 @@ class MasterSchemaGenerator:
             initial_schema[table_name] = {
                 "columns": {}
             }
-            for field_name, field_info in schema["fields"].items():
-                initial_schema[table_name]["columns"][field_name] = {
+            for column_name, field_info in schema["fields"].items():
+                initial_schema[table_name]["columns"][column_name] = {
                     "description": field_info.get("description", ""),
                     "type": field_info.get("type_simple", "string"),
                     #"primary_key": False,  # Will be updated by Claude
@@ -214,16 +215,13 @@ def analyze_csv_files(directory):
     # Process all CSV files
     csv_files = Path(directory).glob('*.csv')
     for csv_file in csv_files:
-        try:
-            with open(csv_file, 'r', encoding='utf-8') as f:
-                csv_reader = csv.reader(f)
-                headers = next(csv_reader)
-                file_name = csv_file.stem  # Get filename without extension
-                headers_by_file[file_name] = set(headers)
-                header_counts.update(headers)
-                print(f"Processed: {csv_file.name}")
-        except Exception as e:
-            print(f"Error processing {csv_file}: {str(e)}")
+        with open(csv_file, 'r', encoding='utf-8') as f:
+            csv_reader = csv.reader(f)
+            headers = next(csv_reader)
+            file_name = csv_file.stem  # Get filename without extension
+            headers_by_file[file_name] = set(headers)
+            header_counts.update(headers)
+            print(f"Processed: {csv_file.name}")
     
     # Print header statistics
     print("\nHeader occurrence across all files:")
@@ -297,8 +295,169 @@ def is_date(value: str) -> bool:
             continue
     return False
 
-def calculate_field_stats(values: list) -> dict:
-    """Calculate enhanced statistics for a field."""
+# Define the tool schema for type inference
+TYPE_INFERENCE_TOOLS = [
+    {
+        "name": "infer_column_types",
+        "description": "Analyze column values to infer data types, patterns, and semantic meaning",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "object",
+                    "description": "Type inference for each analyzed column",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "regex": {
+                                "type": "string",
+                                "description": "A regex pattern that matches most values in this column"
+                            },
+                            "meaning": {
+                                "type": "string",
+                                "description": "The semantic meaning of the data (e.g., date, name, id, code)"
+                            }
+                        },
+                        "required": ["regex", "meaning"]
+                    }
+                }
+            },
+            "required": ["columns"]
+        }
+    }
+]
+
+# System prompt for consistent context
+import json
+import random
+from functools import lru_cache
+from typing import List, Dict, Any
+import anthropic
+
+# Define the tool schema for type inference
+TYPE_INFERENCE_TOOLS = [
+    {
+        "name": "infer_column_types",
+        "description": "Analyze column values to infer data types, patterns, and semantic meaning",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "columns": {
+                    "type": "object",
+                    "description": "Type inference for each analyzed column",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "regex": {
+                                "type": "string",
+                                "description": "A regex pattern that matches most values in this column"
+                            },
+                            "meaning": {
+                                "type": "string",
+                                "description": "The semantic meaning of the data (e.g., date, name, id, code)"
+                            }
+                        },
+                        "required": ["regex", "meaning"]
+                    }
+                }
+            },
+            "required": ["columns"]
+        }
+    }
+]
+
+# System prompt for consistent context
+SYSTEM_PROMPT = """You are a data pattern analysis expert specializing in healthcare data. Your role is to:
+
+1. Create precise regex patterns matching data formats
+2. Identify semantic meanings and purposes of data fields
+
+IMPORTANT REGEX GUIDELINES:
+- Always create general-purpose regex patterns that match the expected data format
+- Even when there's only one unique value, create a pattern that would match similar valid values
+- Never create regexes that only match specific string literals
+- Use appropriate character classes and quantifiers to match the general pattern
+
+Examples of good general patterns vs overly specific ones:
+✓ Organization name: "^[A-Za-z0-9\\s.,-]+$" 
+✗ Organization name: "^OHDSI$"
+
+✓ URL pattern: "^https://github\\.com/[A-Za-z0-9-]+/[A-Za-z0-9-]+$"
+✗ URL pattern: "^https://github\\.com/OHDSI/ETL-Synthea$"
+
+✓ Description text: "^[A-Za-z0-9\\s.,()-]+$"
+✗ Description text: "^SyntheaTM is a Synthetic Patient Population Simulator\\.$"
+
+Consider these common healthcare data patterns:
+- Patient identifiers and medical record numbers
+- Diagnostic codes (ICD-10, SNOMED, etc.)
+- Medication codes and names 
+- Date/time formats
+- Healthcare provider identifiers
+- Clinical measurements and vital signs
+- Billing codes and amounts
+- Medical procedure codes
+
+For regex patterns:
+- Start with broad character classes ([A-Za-z0-9]) instead of specific characters
+- Use appropriate quantifiers (*, +, ?) to handle varying lengths
+- Consider common pattern variations in healthcare data
+- Account for both required and optional components
+- Include common delimiters and special characters where appropriate
+
+For semantic meanings:
+- Use clear, specific categories (e.g., "patient_id", "diagnosis_code", "medication_name")
+- Consider the context of healthcare data
+- Note if a field appears to be a foreign key or reference"""
+
+def infer_column_types(table_name, column_name: dict, unique_values, client: anthropic.Anthropic) -> dict:
+    """
+    Use Claude with the simplified tool to infer column patterns and meanings.
+    
+    Args:
+        column_data: Dictionary mapping column names to lists of unique values
+        client: Anthropic client instance
+    
+    Returns:
+        Dictionary containing inferred patterns and meanings for each column
+    """
+    # Prepare sample data for Claude
+    sample_data = {}
+    random.shuffle(unique_values)
+    sample_data[column_name] = unique_values[:10]
+
+    # Get Claude's analysis using the tool
+    message = client.messages.create(
+        model="claude-3-5-sonnet-20241022",
+        max_tokens=4096,
+        temperature=0,
+        system=[
+            {
+                "type": "text", 
+                "text": SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"}
+            }
+        ],
+        messages=[{
+            "role": "user",
+            "content": f"""
+Here is a sample of the unique values found in the column in table `{table_name}`, column `{column_name}`:
+{json.dumps(sample_data, indent=2)}
+"""
+        }],
+        tools=TYPE_INFERENCE_TOOLS
+    )
+    
+    # Extract the tool response
+    for content in message.content:
+        if hasattr(content, 'input'):
+            return next(iter(content.input["columns"].values()))
+
+    # Return empty dict if no tool response
+    return {}
+
+def calculate_field_stats(table_name, values: list, column_name: str, client: anthropic.Anthropic) -> dict:
+    """Calculate enhanced statistics for a field, including type inference."""
     total_count = len(values)
     if total_count == 0:
         return {"total_values": 0}
@@ -306,8 +465,9 @@ def calculate_field_stats(values: list) -> dict:
     # Basic counts
     non_empty_values = [v for v in values if v.strip() != '']
     non_empty_count = len(non_empty_values)
-    unique_values = set(values)
+    unique_values = list(set(values))  # Convert to list for JSON serialization
     unique_count = len(unique_values)
+    value_types = list(set([type(v).__name__ for v in values]))
 
     # Value frequencies
     value_counts = Counter(values)
@@ -342,7 +502,7 @@ def calculate_field_stats(values: list) -> dict:
 
     # Check if values are numeric
     numeric_values = [float(v) for v in non_empty_values if is_numeric(v)]
-    if numeric_values:  # Only add numeric stats if we have numeric values
+    if numeric_values:
         stats["numeric_stats"] = {
             "min": min(numeric_values),
             "max": max(numeric_values),
@@ -351,7 +511,7 @@ def calculate_field_stats(values: list) -> dict:
         }
 
     # Check if values are dates
-    if non_empty_values:  # Only check dates if we have non-empty values
+    if non_empty_values:
         date_samples = [v for v in non_empty_values[:100] if is_date(v)]
         if date_samples and len(date_samples) >= 0.5 * min(len(non_empty_values[:100]), 100):
             dates = []
@@ -369,64 +529,69 @@ def calculate_field_stats(values: list) -> dict:
                     "distinct_years": len({d.year for d in dates})
                 }
 
+    
+    # Add type inference information to field stats
+    stats["type"] =  infer_column_types(table_name, column_name, unique_values, client)
+    stats["type"]["data_types"] = value_types
+    print(f"`{table_name}.{column_name}`: {json.dumps(stats, indent=2)}")
+
     return stats
 
 def build_table_schema(directory: str):
-    """Build schema files for each table."""
+    """Build schema files for each table with enhanced type inference."""
     schema_dir = Path("schema/tables")
     schema_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Initialize Anthropic client
+    client = anthropic.Anthropic()
     
     csv_files = Path(directory).glob('*.csv')
     csv_files = [csv_file for csv_file in csv_files]
     table_names = [csv_file.stem for csv_file in csv_files]
+    
     for csv_file in csv_files:
-        try:
-            with open(csv_file, 'r', encoding='utf-8') as f:
-                csv_reader = csv.reader(f)
-                headers = next(csv_reader)
-                
-                # Initialize data collection
-                table_name = csv_file.stem
-                table_data = {
-                    "table_name": table_name,
-                    "record_count": 0,
-                    "fields": {header: [] for header in headers}
-                }
-                
-                # Collect all values for each field
-                for row in csv_reader:
-                    table_data["record_count"] += 1
-                    for i, value in enumerate(row):
-                        if i < len(headers):
-                            table_data["fields"][headers[i]].append(value)
-                
-                # Calculate statistics for each field
-                field_stats = {}
-                for field_name, values in table_data["fields"].items():
-                    _field_stats = calculate_field_stats(values)
-                    primary_key = is_primary_key(field_name, table_name)
-                    foreign_key = is_foreign_key(field_name, table_name, table_names)
-                    if primary_key: _field_stats['primary_key'] = primary_key
-                    if foreign_key: _field_stats['foreign_key'] = foreign_key
-                    field_stats[field_name] = _field_stats
-                
-                # Prepare final schema
-                schema = {
-                    "table_name": table_data["table_name"],
-                    "record_count": table_data["record_count"],
-                    "fields": field_stats
-                }
-                
-                # Write schema file
-                json_path = schema_dir / f"{table_name}.json"
-                with open(json_path, 'w', encoding='utf-8') as f:
-                    json.dump(schema, f, indent=2)
-                
-                print(f"Created table schema: {json_path}")
-                
-        except Exception as e:
-            print(f"Error processing table {csv_file}: {str(e)}")
-
+        with open(csv_file, 'r', encoding='utf-8') as f:
+            csv_reader = csv.reader(f)
+            headers = next(csv_reader)
+            
+            # Initialize data collection
+            table_name = csv_file.stem
+            table_data = {
+                "table_name": table_name,
+                "record_count": 0,
+                "fields": {header: [] for header in headers}
+            }
+            
+            # Collect all values for each field
+            for row in csv_reader:
+                table_data["record_count"] += 1
+                for i, value in enumerate(row):
+                    if i < len(headers):
+                        table_data["fields"][headers[i]].append(value)
+            
+            # Calculate statistics for each field with type inference
+            field_stats = {}
+            for column_name, values in table_data["fields"].items():
+                _field_stats = calculate_field_stats(table_name, values, column_name, client)
+                primary_key = is_primary_key(column_name, table_name)
+                foreign_key = is_foreign_key(column_name, table_name, table_names)
+                if primary_key: _field_stats['primary_key'] = primary_key
+                if foreign_key: _field_stats['foreign_key'] = foreign_key
+                field_stats[column_name] = _field_stats
+            
+            # Prepare final schema
+            schema = {
+                "table_name": table_data["table_name"],
+                "record_count": table_data["record_count"],
+                "fields": field_stats
+            }
+            
+            # Write schema file
+            json_path = schema_dir / f"{table_name}.json"
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(schema, f, indent=2)
+            
+            print(f"Created enhanced table schema: {json_path}")
 
 def build_master_schema(datasets_dir):
     generator = MasterSchemaGenerator()
