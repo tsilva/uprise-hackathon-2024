@@ -2,7 +2,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import random
-import csv
 import json
 from pathlib import Path
 from collections import Counter
@@ -14,6 +13,7 @@ import json
 import anthropic
 from pathlib import Path
 from typing import Dict, List
+import pandas as pd  # Add pandas import
 
 # Define the tool schema for table documentation
 TOOLS = [
@@ -223,11 +223,11 @@ def is_date(value: str) -> bool:
 def calculate_column_stats(table_name, values: list, column_name: str, client: anthropic.Anthropic) -> dict:
     """Calculate enhanced statistics for a column, including type inference."""
     total_count = len(values)
-    if total_count == 0:
+    if (total_count == 0):
         return {"total_values": 0}
 
     # Basic counts
-    non_empty_values = [v for v in values if v.strip() != '']
+    non_empty_values = [v for v in values if type(v) == str and v.strip() != '' or type(v) != str]
     non_empty_count = len(non_empty_values)
     unique_values = list(set(values))  # Convert to list for JSON serialization
     unique_count = len(unique_values)
@@ -235,6 +235,7 @@ def calculate_column_stats(table_name, values: list, column_name: str, client: a
 
     sample_values = list(values)
     sample_values = [x for x in sample_values if type(x) == str and x.strip() != '' or type(x) != str]
+    sample_values = list(set(values))
     random.shuffle(sample_values)
     sample_values = sample_values[:10]
 
@@ -249,8 +250,6 @@ def calculate_column_stats(table_name, values: list, column_name: str, client: a
         "non_empty_percentage": round((non_empty_count / total_count * 100), 2) if total_count > 0 else 0,
         "unique_values": unique_count,
         "unique_values_percentage": round((unique_count / total_count * 100), 2) if total_count > 0 else 0,
-        "null_or_empty_count": sum(1 for v in values if v.lower() in ('null', 'none', '')),
-        "whitespace_only_count": sum(1 for v in values if v.strip() == '' and v != ''),
         "most_common_values": {str(v): c for v, c in most_common},
         "sample_values": sample_values,
         "value_types": value_types
@@ -302,12 +301,33 @@ def calculate_column_stats(table_name, values: list, column_name: str, client: a
 
     return stats
 
+def infer_column_type(series: pd.Series) -> tuple[str, pd.Series]:
+    """Infer the type of a column and convert values accordingly."""
+    # Try integer first
+    try:
+        non_empty = series[series != '']
+        # Check if all non-empty values can be exactly represented as integers
+        if (non_empty.astype(float) % 1 == 0).all():
+            return 'integer', series.apply(lambda x: int(float(x)) if x != '' else '')
+    except (ValueError, TypeError):
+        pass
+    
+    # Try float
+    try:
+        non_empty = series[series != '']
+        non_empty.astype(float)
+        return 'float', series.apply(lambda x: float(x) if x != '' else '')
+    except (ValueError, TypeError):
+        pass
+    
+    # Keep as string if numeric conversion fails
+    return 'string', series
+
 def build_table_schema(directory: str):
     """Build schema files for each table with enhanced type inference."""
     schema_dir = Path("schema/tables")
     schema_dir.mkdir(parents=True, exist_ok=True)
     
-    # Initialize Anthropic client
     client = anthropic.Anthropic()
     
     csv_files = Path(directory).glob('*.csv')
@@ -315,48 +335,47 @@ def build_table_schema(directory: str):
     table_names = [csv_file.stem for csv_file in csv_files]
     
     for csv_file in csv_files:
-        with open(csv_file, 'r', encoding='utf-8') as f:
-            csv_reader = csv.reader(f)
-            headers = next(csv_reader)
-            
-            # Initialize data collection
-            table_name = csv_file.stem
-            table_data = {
-                "table_name": table_name,
-                "record_count": 0,
-                "columns": {header: [] for header in headers}
-            }
-            
-            # Collect all values for each column
-            for row in csv_reader:
-                table_data["record_count"] += 1
-                for i, value in enumerate(row):
-                    if i < len(headers):
-                        table_data["columns"][headers[i]].append(value)
-            
-            # Calculate statistics for each column with type inference
-            column_stats = {}
-            for column_name, values in table_data["columns"].items():
-                _column_stats = calculate_column_stats(table_name, values, column_name, client)
-                primary_key = is_primary_key(column_name, table_name)
-                foreign_key = is_foreign_key(column_name, table_name, table_names)
-                if primary_key: _column_stats['primary_key'] = primary_key
-                if foreign_key: _column_stats['foreign_key'] = foreign_key
-                column_stats[column_name] = _column_stats
-            
-            # Prepare final schema
-            schema = {
-                "table_name": table_data["table_name"],
-                "record_count": table_data["record_count"],
-                "columns": column_stats
-            }
-            
-            # Write schema file
-            json_path = schema_dir / f"{table_name}.json"
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(schema, f, indent=2)
-            
-            print(f"Created table schema: {json_path}")
+        # Read CSV with pandas, keeping NA values as empty strings
+        df = pd.read_csv(csv_file, na_filter=False)
+        
+        # Initialize data collection
+        table_name = csv_file.stem
+        
+        # Process each column with type inference
+        processed_columns = {}
+        for column in df.columns:
+            col_type, processed_values = infer_column_type(df[column])
+            processed_columns[column] = processed_values.tolist()
+        
+        table_data = {
+            "table_name": table_name,
+            "record_count": len(df),
+            "columns": processed_columns
+        }
+        
+        # Calculate statistics for each column
+        column_stats = {}
+        for column_name, values in table_data["columns"].items():
+            _column_stats = calculate_column_stats(table_name, values, column_name, client)
+            primary_key = is_primary_key(column_name, table_name)
+            foreign_key = is_foreign_key(column_name, table_name, table_names)
+            if primary_key: _column_stats['primary_key'] = primary_key
+            if foreign_key: _column_stats['foreign_key'] = foreign_key
+            column_stats[column_name] = _column_stats
+        
+        # Prepare final schema
+        schema = {
+            "table_name": table_data["table_name"],
+            "record_count": table_data["record_count"],
+            "columns": column_stats
+        }
+        
+        # Write schema file
+        json_path = schema_dir / f"{table_name}.json"
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(schema, f, indent=2)
+        
+        print(f"Created table schema: {json_path}")
 
 def build_master_schema(datasets_dir):
     generator = MasterSchemaGenerator()
@@ -379,4 +398,4 @@ def build_master_schema(datasets_dir):
 if __name__ == "__main__":
     datasets_dir = "datasets/Synthea27Nj_5.4"
     build_table_schema(datasets_dir)
-    #build_master_schema(datasets_dir)
+    build_master_schema(datasets_dir)
