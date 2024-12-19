@@ -96,19 +96,39 @@ def aggregate_evals(schema_quality):
         table_evals = _calculate_table_evals(table_data)
         schema_quality[table_name]["evals"] = table_evals
 
-def calculate_final_score(schema_quality):
-    final_score = 0
-    for _, table_data in schema_quality.items(): final_score += table_data["evals"]["score"]
-    final_score /= len(schema_quality)
-    return final_score
+def calculate_global_scores(schema_quality):
+    """Calculate global scores for each metric across all tables."""
+    all_metrics = {}
+    
+    # Collect metrics from all tables
+    for table_data in schema_quality.values():
+        if "evals" not in table_data: continue
+        for metric, value in table_data["evals"].items():
+            if metric == "score": continue  # Skip table-level scores
+            if metric not in all_metrics:
+                all_metrics[metric] = []
+            all_metrics[metric].append(value)
+    
+    # Calculate global averages
+    global_scores = {}
+    for metric, values in all_metrics.items():
+        if values:
+            global_scores[metric] = sum(values) / len(values)
+    
+    final_score = sum([score for score in global_scores.values()]) / len(global_scores)
+    global_scores["final_data_quality_score"] = final_score
 
+    return global_scores
+
+# Run evals and save results
 schema = load_json('schema/schema.json')
-schema_quality = {} #load_json('schema/schema.json')
+schema_quality = {}
 eval_regex_accuracy(schema, schema_quality)
 eval_primary_key_uniqueness(schema, schema_quality)
 eval_foreign_key_consistency(schema, schema_quality)
 aggregate_evals(schema_quality)
 save_json('schema/schema_quality.json', schema_quality)
 
-final_score = calculate_final_score(schema_quality)
-print(f"Eval score: {final_score * 100:.2f}%")
+# Print eval scores
+global_scores = calculate_global_scores(schema_quality)
+for metric, score in global_scores.items(): print(f"{metric}: {score * 100:.2f}%")
