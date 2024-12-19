@@ -8,72 +8,74 @@ from typing import Dict, List
 from datetime import datetime
 from statistics import mean, median
 
+MODEL_ID = "claude-3-5-sonnet-20241022"
+DATASET_DIR = "datasets/Synthea27Nj_5.4"
+TABLE_SCHEMAS_DIR = "schema/tables"
+
 # Define the tool schema for table documentation
-TOOLS = [
-    {
-        "name": "document_schema",
-        "description": "Document the purpose and structure of database tables and their columns, including primary and foreign key relationships",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "tables": {
+TABLE_SCHEMA_TOOL= {
+    "name": "document_schema",
+    "description": "Document the purpose and structure of database tables and their columns, including primary and foreign key relationships",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "tables": {
+                "type": "object",
+                "description": "Documentation for each table and its columns",
+                "additionalProperties": {
                     "type": "object",
-                    "description": "Documentation for each table and its columns",
-                    "additionalProperties": {
-                        "type": "object",
-                        "properties": {
-                            "description": {
-                                "type": "string",
-                                "description": "Clear description of the table's purpose and role in the system"
-                            },
-                            "columns": {
-                                "type": "object",
-                                "description": "Documentation for each column in the table",
-                                "additionalProperties": {
-                                    "type": "object",
-                                    "properties": {
-                                        "description": {
-                                            "type": "string",
-                                            "description": "Clear description of the column's purpose and contents"
-                                        },
-                                        "type": {
-                                            "type": "string",
-                                            "description": "Data type of the column"
-                                        },
-                                        "primary_key": {
-                                            "type": "boolean",
-                                            "description": "Whether this column is a primary key",
-                                            "default": False
-                                        },
-                                        "foreign_key": {
-                                            "type": ["object", "null"],
-                                            "description": "Foreign key reference if this column references another table",
-                                            "properties": {
-                                                "table": {
-                                                    "type": "string",
-                                                    "description": "Name of the referenced table"
-                                                },
-                                                "column": {
-                                                    "type": "string",
-                                                    "description": "Name of the referenced column"
-                                                }
-                                            },
-                                            "required": ["table", "column"],
-                                            "default": None
-                                        }
-                                    },
-                                    "required": ["description", "type"]
-                                }
-                            }
+                    "properties": {
+                        "description": {
+                            "type": "string",
+                            "description": "Clear description of the table's purpose and role in the system"
                         },
-                        "required": ["description", "columns"]
-                    }
+                        "columns": {
+                            "type": "object",
+                            "description": "Documentation for each column in the table",
+                            "additionalProperties": {
+                                "type": "object",
+                                "properties": {
+                                    "description": {
+                                        "type": "string",
+                                        "description": "Clear description of the column's purpose and contents"
+                                    },
+                                    "type": {
+                                        "type": "string",
+                                        "description": "Data type of the column"
+                                    },
+                                    "primary_key": {
+                                        "type": "boolean",
+                                        "description": "Whether this column is a primary key",
+                                        "default": False
+                                    },
+                                    "foreign_key": {
+                                        "type": ["object", "null"],
+                                        "description": "Foreign key reference if this column references another table",
+                                        "properties": {
+                                            "table": {
+                                                "type": "string",
+                                                "description": "Name of the referenced table"
+                                            },
+                                            "column": {
+                                                "type": "string",
+                                                "description": "Name of the referenced column"
+                                            }
+                                        },
+                                        "required": ["table", "column"],
+                                        "default": None
+                                    }
+                                },
+                                "required": ["description", "type"]
+                            }
+                        }
+                    },
+                    "required": ["description", "columns"]
                 }
-            },
-            "required": ["tables"]
-        }
+            }
+        },
+        "required": ["tables"]
     }
-]
+}
 
 class MasterSchemaGenerator:
     def __init__(self):
@@ -82,7 +84,7 @@ class MasterSchemaGenerator:
     def load_all_schemas(self, schema_dir: Path) -> List[Dict]:
         return [json.load(open(f)) for f in schema_dir.glob("*.json")]
     
-    def generate_master_documentation(self, table_schemas: List[Dict]) -> Dict:
+    def generate_master_schema(self, table_schemas: List[Dict]) -> Dict:
         all_tables_schema = {s["table_name"]: s for s in table_schemas if s.get('record_count', 0) > 0}
         system_prompt = f"""You are a specialized database expert focusing on healthcare data models. Your task is to analyze database schemas and create comprehensive documentation for specified tables.
 
@@ -102,12 +104,12 @@ Use the document_schema tool to provide your analysis."""
         while tables_to_process := list(set(all_table_names) - set(processed_tables.keys())):
             chunk = tables_to_process[:4]
             message = self.client.messages.create(
-                model="claude-3-5-sonnet-20241022",
+                model=MODEL_ID,
                 max_tokens=8192,
                 temperature=0,
                 system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": f"Generate documentation for: {', '.join(chunk)}"}],
-                tools=TOOLS
+                tools=[TABLE_SCHEMA_TOOL]
             )
             
             for content in message.content:
@@ -144,7 +146,7 @@ def is_date(value: str) -> bool:
             continue
     return False
 
-def calculate_column_stats(table_name, values: list, column_name: str, client: anthropic.Anthropic) -> dict:
+def calculate_column_stats(values: list) -> dict:
     """Calculate enhanced statistics for a column, including type inference."""
     total_count = len(values)
     if (total_count == 0):
@@ -247,14 +249,12 @@ def infer_column_type(series: pd.Series) -> tuple[str, pd.Series]:
     # Keep as string if numeric conversion fails
     return 'string', series
 
-def build_table_schema(directory: str):
+def build_table_schema():
     """Build schema files for each table with enhanced type inference."""
-    schema_dir = Path("schema/tables")
+    schema_dir = Path(TABLE_SCHEMAS_DIR)
     schema_dir.mkdir(parents=True, exist_ok=True)
-    
-    client = anthropic.Anthropic()
-    
-    csv_files = Path(directory).glob('*.csv')
+
+    csv_files = Path(DATASET_DIR).glob('*.csv')
     csv_files = [csv_file for csv_file in csv_files]
     
     for csv_file in csv_files:
@@ -279,7 +279,7 @@ def build_table_schema(directory: str):
         # Calculate statistics for each column
         column_stats = {}
         for column_name, values in table_data["columns"].items():
-            column_stats[column_name] = calculate_column_stats(table_name, values, column_name, client)
+            column_stats[column_name] = calculate_column_stats(values)
         
         # Prepare final schema
         schema = {
@@ -295,7 +295,7 @@ def build_table_schema(directory: str):
         
         print(f"Created table schema: {json_path}")
 
-def build_master_schema(datasets_dir):
+def build_master_schema():
     generator = MasterSchemaGenerator()
     
     # Setup paths
@@ -303,17 +303,16 @@ def build_master_schema(datasets_dir):
     output_file = Path("schema/schema.json")
     
     print("Loading schema files...")
-    schemas = generator.load_all_schemas(schema_dir)
-    print(f"Loaded {len(schemas)} schema files")
+    table_schemas = generator.load_all_schemas(schema_dir)
+    print(f"Loaded {len(table_schemas)} schema files")
     
     print("\nGenerating master schema...")
-    master_schema = generator.generate_master_documentation(schemas)
+    master_schema = generator.generate_master_schema(table_schemas)
     
     print("\nSaving master schema...")
     generator.save_master_schema(master_schema, output_file)
     print(f"\nMaster schema saved to {output_file}")
 
 if __name__ == "__main__":
-    datasets_dir = "datasets/Synthea27Nj_5.4"
-    build_table_schema(datasets_dir)
-    build_master_schema(datasets_dir)
+    build_table_schema()
+    build_master_schema()
