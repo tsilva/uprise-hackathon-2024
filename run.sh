@@ -13,21 +13,16 @@ echo "==============================================="
 python schema_build.py
 
 echo "==============================================="
-echo "        STEP 2: BASELINE EVALUATION           "
-echo "==============================================="
-python data_eval.py
-
-echo "==============================================="
-echo "         STEP 3: INJECT DAMAGE                "
+echo "         STEP 2: INJECT DAMAGE                "
 echo "==============================================="
 python data_damage.py
 
 echo "==============================================="
-echo "         STEP 4: APPLY HEALING                "
+echo "         STEP 3: APPLY HEALING                "
 echo "==============================================="
 python data_heal.py
 
 echo "==============================================="
-echo "         STEP 5: FINAL EVALUATION             "
+echo "         STEP 4: FINAL EVALUATION             "
 echo "==============================================="
 python data_eval.py

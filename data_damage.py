@@ -9,19 +9,38 @@ MODEL_ID = "claude-3-5-sonnet-20241022"
 DATASET_DIR = "datasets/Synthea27Nj_5.4"
 DAMAGED_DATASET_DIR = "datasets/Synthea27Nj_5.4_damaged"
 
-SYSTEM_PROMPT = """You are a value disturber. You will receive a regex pattern followed by values that match that pattern. Your task is to disturb each value while ensuring:
-1. The disturbed value maintains compliance with the provided regex pattern
-2. The disturbed value maintains the same semantic meaning as the original
-3. You output ONLY the disturbed values, one per line, in the exact same order as received
+SYSTEM_PROMPT = """You are a data quality degradation specialist. Your goal is to introduce realistic data entry variations that make values break their regex pattern while ensuring a human could easily recover the original intended value. The changes should preserve semantic meaning in a way that makes the correct value obvious to humans.
+
+Common real-world examples:
+- Years: "1984" → "0984", "'84", "1984y", "19 84", "1,984"
+- Dates: "2024-01-01" → "Jan-01-2024", "01/01/24", "2024.01.01", "1st Jan 2024"
+- Names: "John" → "john", "JOHN", "Jon", "Jhon", "J0hn"
+- Phone: "1234567890" → "123-456-7890", "(123) 456 7890", "123.456.7890"
+- IDs: "ABC123" → "ABC-123", "abc123", "ABC 123", "abc_123"
+- Gender: "F" → "Female", "female", "f", "fem"
+- Numbers: "123456" → "123,456", "123 456", "123.456", "123K"
+- Email: "user@domain.com" → "user @ domain.com", "USER@domain.com"
+- Boolean: "true" → "True", "YES", "y", "T"
+- Currency: "1000" → "$1000", "1,000", "1000.00", "1k"
+- Addresses: "123 Main St" → "123 main street", "123, Main St.", "123 Main Street"
+- Countries: "USA" → "United States", "U.S.A.", "US", "U.S."
+- Times: "13:45" → "1:45 PM", "13.45", "1345hrs"
+
+You will receive a regex pattern followed by values. For each value:
+1. Try to break the regex pattern while keeping meaning crystal clear
+2. Ensure a human could confidently restore the original format
+3. Output ONLY the disturbed values, one per line, in the same order
 4. No explanations or additional text, just the disturbed values
 
-You can introduce variations like:
-- Adding spaces or dots in strings
-- Using different date formats for dates
-- Adding typical human typos
-- Changing letter cases
-- Using alternative number formats
-- Any other variations that preserve meaning while changing representation"""
+Focus on introducing common real-world variations like:
+- Adding spaces, dots, dashes or alternative separators
+- Using different regional formats (US/UK/EU styles)
+- Adding typical human typos and spelling variations
+- Mixing letter cases
+- Converting between full and abbreviated forms
+- Using text instead of numbers or vice versa
+- Adding common prefixes/suffixes
+- Using alternative but equivalent representations"""
 
 client = anthropic.Anthropic()
 
@@ -34,6 +53,11 @@ def load_table(table_name):
     return pd.read_csv(table_path)
 
 def damage_values(regex, values):
+    # Special handling for gender values
+    if regex == "^[MF]$":
+        # Randomly choose between keeping original or switching case
+        return [v.lower() if np.random.random() > 0.5 else v for v in values]
+    
     message = client.messages.create(
         model=MODEL_ID,
         max_tokens=1000,
@@ -55,9 +79,11 @@ def damage_dataset():
             values = table_df[column_name].values
             sampled_indexes = np.random.randint(0, len(values), 10)
             sampled_values = values[sampled_indexes]
+            if all(pd.isnull(sampled_values)): continue
             sampled_values = list(map(str, sampled_values))
             damaged_values = damage_values(regex, sampled_values)
             table_df.loc[sampled_indexes, column_name] = damaged_values
+
 
             print("Table name:", table_name)
             print("Column name:", column_name)
