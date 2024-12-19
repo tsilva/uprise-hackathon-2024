@@ -112,7 +112,7 @@ def calculate_field_stats(values: list) -> dict:
     """Calculate enhanced statistics for a field."""
     total_count = len(values)
     if total_count == 0:
-        return {"total_values": 0, "error": "No values present"}
+        return {"total_values": 0}
 
     # Basic counts
     non_empty_values = [v for v in values if v.strip() != '']

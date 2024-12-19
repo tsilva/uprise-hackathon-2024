@@ -164,63 +164,6 @@ regex: <regex_pattern>
             "column_details": column_details
         }
 
-    def analyze_key_relationships(self, schema: dict) -> dict:
-        """Use Claude to analyze and identify primary and foreign keys"""
-        prompt = f"""Analyze this database table schema and identify:
-1. Which fields are likely primary keys (unique identifiers for this table)
-2. Which fields are likely foreign keys (references to other tables)
-
-Schema:
-{json.dumps(schema, indent=2)}
-
-Provide your analysis in this exact format:
-PRIMARY_KEYS:
-field1: reason
-field2: reason
-
-FOREIGN_KEYS:
-field1: referenced_table.referenced_field
-field2: referenced_table.referenced_field
-
-Base your analysis on:
-- Field names (e.g., *_id fields)
-- Uniqueness (100% unique values likely indicate primary keys)
-- Value patterns and descriptions
-- Common database naming conventions
-"""
-
-        message = self.client.messages.create(
-            model="claude-3-5-sonnet-20241022",
-            max_tokens=8192,
-            temperature=0,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
-
-        # Parse the response
-        response = message.content[0].text
-        key_info = {"primary_keys": {}, "foreign_keys": {}}
-        
-        current_section = None
-        for line in response.split('\n'):
-            line = line.strip()
-            if line == "PRIMARY_KEYS:":
-                current_section = "primary_keys"
-                continue
-            elif line == "FOREIGN_KEYS:":
-                current_section = "foreign_keys"
-                continue
-            
-            if current_section and line and ":" in line:
-                field, info = line.split(':', 1)
-                field = field.strip()
-                info = info.strip()
-                if field and info:
-                    key_info[current_section][field] = info
-
-        return key_info
-
     def update_schema(self, table_name: str, descriptions: Dict):
         """Update the table's schema file with descriptions and regex patterns"""
         schema_path = Path(f"schema/tables/{table_name}.json")
@@ -271,28 +214,9 @@ Base your analysis on:
         ordered_schema = {
             "table_name": schema["table_name"],
             "record_count": schema["record_count"],
-            "primary_key": f"{schema['table_name'].lower()}_id",
             "description": descriptions["table_description"],
             "fields": fields
         }
-
-        # After creating ordered_schema, analyze key relationships
-        key_info = self.analyze_key_relationships(ordered_schema)
-        
-        # Add key relationship information
-        ordered_schema["key_relationships"] = {
-            "primary_keys": key_info["primary_keys"],
-            "foreign_keys": key_info["foreign_keys"]
-        }
-
-        # Update field information with key relationship flags
-        for field_name in ordered_schema["fields"]:
-            if field_name in key_info["primary_keys"]:
-                ordered_schema["fields"][field_name]["is_primary_key"] = True
-                ordered_schema["fields"][field_name]["primary_key_reason"] = key_info["primary_keys"][field_name]
-            if field_name in key_info["foreign_keys"]:
-                ordered_schema["fields"][field_name]["is_foreign_key"] = True
-                ordered_schema["fields"][field_name]["references"] = key_info["foreign_keys"][field_name]
 
         with open(schema_path, 'w') as f:
             json.dump(ordered_schema, f, indent=2)
