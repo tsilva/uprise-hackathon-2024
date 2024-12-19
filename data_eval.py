@@ -26,6 +26,30 @@ def set_column_eval(schema_quality, table_name, column_name, eval_name, eval_val
     table["columns"] = table_columns
     schema_quality[table_name] = table
 
+def eval_primary_key_uniqueness(schema, schema_quality):
+    for table_name, table_data in schema.items():
+        df = load_table(table_name)
+        for column_name, column_data in table_data["columns"].items():
+            if not column_data.get("primary_key", False): continue
+            values = df[column_name].values
+            primary_key_uniqueness_score = len(set(values)) / len(values)
+            set_column_eval(schema_quality, table_name, column_name, "primary_key_uniqueness_score", primary_key_uniqueness_score)
+
+def eval_foreign_key_consistency(schema, schema_quality):
+    for table_name, table_data in schema.items():
+        df = load_table(table_name)
+        for column_name, column_data in table_data["columns"].items():
+            foreign_key = column_data.get("foreign_key")
+            if not foreign_key: continue
+            values = df[column_name].values
+            foreign_key_table = foreign_key["table"]
+            foreign_key_column = foreign_key["column"]
+            foreign_table = load_table(foreign_key_table)
+            foreign_values = foreign_table[foreign_key_column].values
+            matches = [value for value in values if value in foreign_values]
+            foreign_key_consistency_score = len(matches) / len(values)
+            set_column_eval(schema_quality, table_name, column_name, "foreign_key_consistency_score", foreign_key_consistency_score)
+
 def eval_regex_accuracy(schema, schema_quality):
     for table_name, table_data in schema.items():
         df = load_table(table_name)
@@ -39,10 +63,10 @@ def eval_regex_accuracy(schema, schema_quality):
             values = df[column_name].values
             mismatches = [value for value in values if not compiled_pattern.fullmatch(str(value))]
 
-            regex_accuracy = 1.0 - len(mismatches) / len(values)
-            set_column_eval(schema_quality, table_name, column_name, "regex_accuracy", regex_accuracy)
+            regex_score = 1.0 - len(mismatches) / len(values)
+            set_column_eval(schema_quality, table_name, column_name, "regex_score", regex_score)
 
-def calculate_table_evals(schema_quality):
+def aggregate_evals(schema_quality):
     def _calculate_table_evals(table_data):
         """Calculate aggregate evaluations for a table from its column evaluations."""
         if not table_data.get("columns"):
@@ -79,9 +103,11 @@ def calculate_final_score(schema_quality):
     return final_score
 
 schema = load_json('schema/schema.json')
-schema_quality = {}
+schema_quality = {} #load_json('schema/schema.json')
 eval_regex_accuracy(schema, schema_quality)
-calculate_table_evals(schema_quality)
+eval_primary_key_uniqueness(schema, schema_quality)
+eval_foreign_key_consistency(schema, schema_quality)
+aggregate_evals(schema_quality)
 save_json('schema/schema_quality.json', schema_quality)
 
 final_score = calculate_final_score(schema_quality)
