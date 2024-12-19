@@ -1,7 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-import os
 import random
 import csv
 import json
@@ -221,133 +220,6 @@ def is_date(value: str) -> bool:
             continue
     return False
 
-
-# Define the tool schema for type inference
-TYPE_INFERENCE_TOOLS = [
-    {
-        "name": "infer_column_types",
-        "description": "Analyze column values to infer data types, patterns, and semantic meaning",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "columns": {
-                    "type": "object",
-                    "description": "Type inference for each analyzed column",
-                    "additionalProperties": {
-                        "type": "object",
-                        "properties": {
-                            "regex": {
-                                "type": "string",
-                                "description": "A regex pattern that matches most values in this column"
-                            },
-                            "meaning": {
-                                "type": "string",
-                                "description": "The semantic meaning of the data (e.g., date, name, id, code)"
-                            }
-                        },
-                        "required": ["regex", "meaning"]
-                    }
-                }
-            },
-            "required": ["columns"]
-        }
-    }
-]
-
-def infer_column_types(table_name, column_name: dict, unique_values, client: anthropic.Anthropic) -> dict:
-    """
-    Use Claude with the simplified tool to infer column patterns and meanings.
-    
-    Args:
-        column_data: Dictionary mapping column names to lists of unique values
-        client: Anthropic client instance
-    
-    Returns:
-        Dictionary containing inferred patterns and meanings for each column
-    """
-
-    # TODO: speed hack    
-    return {"regex" : ".*", "meaning": "string"}
-
-    # System prompt for consistent context
-    system_prompt = """You are a data pattern analysis expert specializing in healthcare data. Your role is to:
-
-    1. Create precise regex patterns matching data formats
-    2. Identify semantic meanings and purposes of data columns
-
-    IMPORTANT REGEX GUIDELINES:
-    - Always create general-purpose regex patterns that match the expected data format
-    - Even when there's only one unique value, create a pattern that would match similar valid values
-    - Never create regexes that only match specific string literals
-    - Use appropriate character classes and quantifiers to match the general pattern
-
-    Examples of good general patterns vs overly specific ones:
-    ✓ Organization name: "^[A-Za-z0-9\\s.,-]+$" 
-    ✗ Organization name: "^OHDSI$"
-
-    ✓ URL pattern: "^https://github\\.com/[A-Za-z0-9-]+/[A-Za-z0-9-]+$"
-    ✗ URL pattern: "^https://github\\.com/OHDSI/ETL-Synthea$"
-
-    ✓ Description text: "^[A-Za-z0-9\\s.,()-]+$"
-    ✗ Description text: "^SyntheaTM is a Synthetic Patient Population Simulator\\.$"
-
-    Consider these common healthcare data patterns:
-    - Patient identifiers and medical record numbers
-    - Diagnostic codes (ICD-10, SNOMED, etc.)
-    - Medication codes and names 
-    - Date/time formats
-    - Healthcare provider identifiers
-    - Clinical measurements and vital signs
-    - Billing codes and amounts
-    - Medical procedure codes
-
-    For regex patterns:
-    - Start with broad character classes ([A-Za-z0-9]) instead of specific characters
-    - Use appropriate quantifiers (*, +, ?) to handle varying lengths
-    - Consider common pattern variations in healthcare data
-    - Account for both required and optional components
-    - Include common delimiters and special characters where appropriate
-
-    For semantic meanings:
-    - Use clear, specific categories (e.g., "patient_id", "diagnosis_code", "medication_name")
-    - Consider the context of healthcare data
-    - Note if a column appears to be a foreign key or reference"""
-
-    # Prepare sample data for Claude
-    sample_data = {}
-    random.shuffle(unique_values)
-    sample_data[column_name] = unique_values[:10]
-
-    # Get Claude's analysis using the tool
-    message = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=4096,
-        temperature=0,
-        system=[
-            {
-                "type": "text", 
-                "text": system_prompt,
-                "cache_control": {"type": "ephemeral"}
-            }
-        ],
-        messages=[{
-            "role": "user",
-            "content": f"""
-Here is a sample of the unique values found in the column in table `{table_name}`, column `{column_name}`:
-{json.dumps(sample_data, indent=2)}
-"""
-        }],
-        tools=TYPE_INFERENCE_TOOLS
-    )
-    
-    # Extract the tool response
-    for content in message.content:
-        if hasattr(content, 'input'):
-            return next(iter(content.input["columns"].values()))
-
-    # Return empty dict if no tool response
-    return {}
-
 def calculate_column_stats(table_name, values: list, column_name: str, client: anthropic.Anthropic) -> dict:
     """Calculate enhanced statistics for a column, including type inference."""
     total_count = len(values)
@@ -427,11 +299,6 @@ def calculate_column_stats(table_name, values: list, column_name: str, client: a
                     "max_date": max(dates).strftime("%Y-%m-%d"),
                     "distinct_years": len({d.year for d in dates})
                 }
-
-    
-    # Add type inference information to column stats
-    #stats["type"] =  infer_column_types(table_name, column_name, unique_values, client)
-    #print(f"`{table_name}.{column_name}`: {json.dumps(stats, indent=2)}")
 
     return stats
 
