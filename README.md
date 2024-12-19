@@ -1,8 +1,8 @@
-# Schema Analysis Tools
+# Pipeline
 
-Contains multiple utilities for analyzing CSV files and generating schema documentation:
-
-- `analyze_csv_files(directory)`: Analyzes CSV files in a directory to find header patterns and table connections
-- `build_column_schema(directory)`: Generates detailed JSON schema files for each column found across all tables
-- `build_table_schema(directory)`: Generates JSON schema files for each table with field statistics
-- `build_schema(directory)`: Combines both schema generation functions
+1. Build the schema from the data - `build_schema.py`
+2. Generate the data quality report - `data_evaluate.py`
+3. Damage dataset - `damage_dataset.py`
+4. Generate the data quality report (should be worse) - `data_evaluate.py`
+5. Heal dataset - `repair_dataset.py`
+6. Generate the data quality report (should be better) - `data_evaluate.py`
