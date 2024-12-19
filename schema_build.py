@@ -8,6 +8,15 @@ from datetime import datetime
 from statistics import mean, median
 from collections import Counter
 
+def is_primary_key(column_name, table_name):
+    return column_name.lower() == f"{table_name.lower()}_id"
+
+def is_foreign_key(column_name, table_name, table_names):
+    for _table_name in table_names:
+        if _table_name.lower() == table_name.lower(): continue
+        if column_name.lower() == f"{_table_name.lower()}_id": return True
+    return False
+
 def analyze_csv_files(directory):
     # Track headers per file and overall counts
     header_counts = Counter()
@@ -237,6 +246,8 @@ def build_table_schema(directory: str):
     schema_dir.mkdir(parents=True, exist_ok=True)
     
     csv_files = Path(directory).glob('*.csv')
+    csv_files = [csv_file for csv_file in csv_files]
+    table_names = [csv_file.stem for csv_file in csv_files]
     for csv_file in csv_files:
         try:
             with open(csv_file, 'r', encoding='utf-8') as f:
@@ -244,8 +255,9 @@ def build_table_schema(directory: str):
                 headers = next(csv_reader)
                 
                 # Initialize data collection
+                table_name = csv_file.stem
                 table_data = {
-                    "table_name": csv_file.stem,
+                    "table_name": table_name,
                     "record_count": 0,
                     "fields": {header: [] for header in headers}
                 }
@@ -260,7 +272,12 @@ def build_table_schema(directory: str):
                 # Calculate statistics for each field
                 field_stats = {}
                 for field_name, values in table_data["fields"].items():
-                    field_stats[field_name] = calculate_field_stats(values)
+                    _field_stats = calculate_field_stats(values)
+                    primary_key = is_primary_key(field_name, table_name)
+                    foreign_key = is_foreign_key(field_name, table_name, table_names)
+                    if primary_key: _field_stats['primary_key'] = primary_key
+                    if foreign_key: _field_stats['foreign_key'] = foreign_key
+                    field_stats[field_name] = _field_stats
                 
                 # Prepare final schema
                 schema = {
@@ -270,7 +287,7 @@ def build_table_schema(directory: str):
                 }
                 
                 # Write schema file
-                json_path = schema_dir / f"{csv_file.stem}.json"
+                json_path = schema_dir / f"{table_name}.json"
                 with open(json_path, 'w', encoding='utf-8') as f:
                     json.dump(schema, f, indent=2)
                 
