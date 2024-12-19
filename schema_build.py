@@ -39,9 +39,9 @@ TABLE_SCHEMA_TOOL= {
                                         "type": "string",
                                         "description": "Clear description of the column's purpose and contents"
                                     },
-                                    "type": {
+                                    "regex" : {
                                         "type": "string",
-                                        "description": "Data type of the column"
+                                        "description": "Regular expression pattern that matches all provided sample values for this column"
                                     },
                                     "primary_key": {
                                         "type": "boolean",
@@ -101,8 +101,9 @@ Use the document_schema tool to provide your analysis."""
 
         processed_tables = {}
         all_table_names = list(all_tables_schema.keys())
-        while tables_to_process := list(set(all_table_names) - set(processed_tables.keys())):
-            chunk = tables_to_process[:4]
+        pending_table_names = list(all_table_names)
+        while pending_table_names:
+            chunk = pending_table_names[:4]
             message = self.client.messages.create(
                 model=MODEL_ID,
                 max_tokens=8192,
@@ -113,9 +114,29 @@ Use the document_schema tool to provide your analysis."""
             )
             
             for content in message.content:
-                if hasattr(content, 'input'):
-                    processed_tables.update(content.input["tables"])
-                    break
+                if not hasattr(content, 'input'): continue
+                generated_table_schemas = content.input["tables"]
+                break
+            
+            processed_table_names = list(generated_table_schemas.keys())
+            pending_table_names = list(set(pending_table_names) - set(processed_table_names))
+            print(f"Processed tables: {processed_table_names}")
+            print(f"Pending tables: {pending_table_names}")
+
+            for table_name, generated_table_schema in generated_table_schemas.items():
+                original_table_schema = all_tables_schema[table_name]
+                
+                processed_columns = {}
+                for column_name, original_column in original_table_schema["columns"].items():
+                    generated_column = generated_table_schema["columns"].get(column_name, {})
+                    processed_column = {**original_column, **generated_column}
+                    processed_columns[column_name] = processed_column
+
+                processed_tables[table_name] = {
+                    **original_table_schema,
+                    **generated_table_schema,
+                    "columns" : processed_columns
+                }
 
         return processed_tables
 
