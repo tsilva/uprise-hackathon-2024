@@ -1,54 +1,50 @@
-# uprise-hackathon-2024
+# Schema Analysis Tools
 
-## Installation
+This repository contains tools for analyzing CSV datasets and generating schema documentation.
 
-To set up the conda environment using the `environment.yml` file, run the following command:
+## Scripts Overview
 
-```sh
-conda env create -f environment.yml
+### schema_build.py
+
+Contains multiple utilities for analyzing CSV files and generating schema documentation:
+
+- `analyze_csv_files(directory)`: Analyzes CSV files in a directory to find header patterns and table connections
+- `build_column_schema(directory)`: Generates detailed JSON schema files for each column found across all tables
+- `build_table_schema(directory)`: Generates JSON schema files for each table with field statistics
+- `build_schema(directory)`: Combines both schema generation functions
+
+## Usage
+
+1. Place your CSV files in a directory (e.g., `datasets/Synthea27Nj_5.4/`)
+
+2. Run the schema analysis:
+
+```bash
+python schema_build.py
 ```
 
-This will create a new conda environment with all the dependencies specified in the `environment.yml` file.
+This will:
+- Create a `schema/` directory with two subdirectories:
+  - `schema/columns/`: Contains JSON files for each unique column with cross-table analysis
+  - `schema/tables/`: Contains JSON files for each table with detailed field statistics
 
-## Updating the Environment
+## Schema Output
 
-If you need to update the conda environment with any changes made to the `environment.yml` file, run:
+### Column Schema Files
+Each column schema file includes:
+- Which tables the column appears in
+- Values found in each table
+- Overlap analysis between tables (when a column appears in multiple tables)
 
-```sh
-conda env update --file environment.yml --prune
-```
+### Table Schema Files
+Each table schema file includes:
+- Total record count
+- Field statistics for each column:
+  - Total values
+  - Non-empty values count and percentage
+  - Unique values count
 
-The `--prune` flag will remove any dependencies that are no longer required.
+## Requirements
 
-
-# TODO
-
-# Build Schema
-
-- Create a schema for each column name
-- In which tables is the column found
-- Which values in each of these tables
-- How much overlap of values is found (primary key?)
-
-- Build schema (quality assessment)
-- Quantify data quality by mapping against schema
-
-
-- Create dictionary of column names
-- Create util that dumps data values for each column name
-- Create util that creates regex for each of those columsn
-- Create util that evaluates which values are out of that regex
-
-Part 1: Chaos Creation
-Brainstorm common healthcare data errors: missing values, duplicates, inconsistent formats, logical inconsistencies.
-Script a pipeline to introduce these errors subtly and ensure they mimic real-world scenarios.
-Part 2: Chaos Detection
-Develop metrics to assess:
-Completeness: Detect missing values.
-Consistency: Flag format mismatches and logical inconsistencies.
-Uniqueness: Identify duplicates.
-Validity: Verify adherence to schema rules.
-Write scripts to calculate a data quality score pre- and post-chaos.
-Part 3: Chaos Correction
-Use cleaning techniques like imputation, outlier detection, and deduplication.
-Develop a pipeline to process the dataset and measure improvement.
+- Python 3.6+
+- Standard libraries (no additional dependencies required)

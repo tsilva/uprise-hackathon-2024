@@ -199,3 +199,5 @@ def build_schema(directory: str):
 if __name__ == "__main__":
     datasets_dir = "datasets/Synthea27Nj_5.4"
     build_schema(datasets_dir)
+
+
