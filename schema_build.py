@@ -1,19 +1,12 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-import random
-import json
+import random, json, anthropic, pandas as pd
 from pathlib import Path
 from collections import Counter
-from typing import Dict
+from typing import Dict, List
 from datetime import datetime
 from statistics import mean, median
-from collections import Counter
-import json
-import anthropic
-from pathlib import Path
-from typing import Dict, List
-import pandas as pd  # Add pandas import
 
 # Define the tool schema for table documentation
 TOOLS = [
@@ -69,7 +62,7 @@ TOOLS = [
                                             "default": None
                                         }
                                     },
-                                    "required": ["description", "type", "primary_key"]
+                                    "required": ["description", "type"]
                                 }
                             }
                         },
@@ -82,105 +75,45 @@ TOOLS = [
     }
 ]
 
-# TODO: merge with defaults from each column
 class MasterSchemaGenerator:
     def __init__(self):
         self.client = anthropic.Anthropic()
         
     def load_all_schemas(self, schema_dir: Path) -> List[Dict]:
-        """Load all schema files from the specified directory"""
-        schemas = []
-        for schema_file in schema_dir.glob("*.json"):
-            with open(schema_file, 'r') as f:
-                schema = json.load(f)
-                schemas.append(schema)
-        return schemas
+        return [json.load(open(f)) for f in schema_dir.glob("*.json")]
     
     def generate_master_documentation(self, table_schemas: List[Dict]) -> Dict:
-        """Generate documentation with table and column descriptions using Claude's tools"""
-        
-        # Create initial structure with table and column information
-        all_tables_schema = {}
-        for table_schema in table_schemas:
-            table_name = table_schema["table_name"]
-            if not table_schema.get('record_count', 0) > 0: continue
-            all_tables_schema[table_name] = table_schema
-
-        # Define system prompt with full schema context
+        all_tables_schema = {s["table_name"]: s for s in table_schemas if s.get('record_count', 0) > 0}
         system_prompt = f"""You are a specialized database expert focusing on healthcare data models. Your task is to analyze database schemas and create comprehensive documentation for specified tables.
 
-You will be provided with the full schema context for understanding relationships:
+Schema context: {json.dumps(all_tables_schema, indent=2)}
 
-{json.dumps(all_tables_schema, indent=2)}
-
-For each requested table, you will:
-1. Document the table's purpose and clinical role in the healthcare system
-2. Explain each column's specific function and importance
-3. Identify and mark all primary keys
-4. Document all foreign key relationships
-5. Explain how the table fits into clinical workflows
-
-When analyzing tables:
-- Document each table's healthcare-specific purpose
-- Explain each column's clinical significance
-- Identify primary keys with certainty (mark as primary_key: true)
-- Detect and document foreign key relationships, specifying both referenced table and column
-- Describe how tables interconnect to model healthcare processes
-
-You understand common database patterns where:
-- Primary keys are typically id columns
-- Foreign keys often end in '_id'
-- Column names may match other table names
-- Healthcare-specific relationships exist between patients, providers, encounters, etc.
-
-Requirements for your analysis:
+Requirements:
+- Document each table's healthcare-specific purpose and clinical role
+- Explain each column's specific function and importance
 - Mark all primary keys (primary_key: true)
-- Specify foreign key references (table and column)
-- Consider healthcare-specific relationships
-- Document all clinical workflows represented
+- Document foreign key relationships
+- Describe how tables interconnect to model healthcare processes
 
 Use the document_schema tool to provide your analysis."""
 
-        all_table_names = list(set(all_tables_schema.keys()))
-        missing_table_names = list(all_table_names)
         processed_tables = {}
-
-        while missing_table_names:
-            chunk_table_names = missing_table_names[:4]
-
+        all_table_names = list(all_tables_schema.keys())
+        while tables_to_process := list(set(all_table_names) - set(processed_tables.keys())):
+            chunk = tables_to_process[:4]
             message = self.client.messages.create(
                 model="claude-3-5-sonnet-20241022",
                 max_tokens=8192,
                 temperature=0,
-                system=[
-                    {
-                        "type": "text", 
-                        "text": system_prompt,
-                        "cache_control": {"type": "ephemeral"}
-                    }
-                ],
-                messages=[{
-                    "role": "user",
-                    "content": f"Please generate documentation for the following tables: {', '.join(chunk_table_names)}"
-                }],
+                system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": f"Generate documentation for: {', '.join(chunk)}"}],
                 tools=TOOLS
             )
             
-            # Extract the tool response
             for content in message.content:
-                if not hasattr(content, 'input'): continue
-                _processed_tables = content.input["tables"]
-                processed_tables = {**processed_tables, **_processed_tables}
-                break
-            
-            missing_table_names = list(set(all_table_names) - set(processed_tables.keys()))
-            #missing_table_names = [] # TODO: hack remove
-
-            print(f"All tables: {all_table_names}")
-            print(f"Requested tables: {chunk_table_names}")
-            print(f"Processed tables: {list(_processed_tables.keys())}")
-            print(f"Missing tables: {missing_table_names}")
-            print("-" * 50)
+                if hasattr(content, 'input'):
+                    processed_tables.update(content.input["tables"])
+                    break
 
         return processed_tables
 
@@ -188,15 +121,6 @@ Use the document_schema tool to provide your analysis."""
         """Save the master schema documentation to a JSON file"""
         with open(output_path, 'w') as f:
             json.dump(documentation, f, indent=2)
-
-def is_primary_key(column_name, table_name):
-    return column_name.lower() == f"{table_name.lower()}_id"
-
-def is_foreign_key(column_name, table_name, table_names):
-    for _table_name in table_names:
-        if _table_name.lower() == table_name.lower(): continue
-        if column_name.lower() == f"{_table_name.lower()}_id": return True
-    return False
 
 def is_numeric(value: str) -> bool:
     """Check if a string value can be converted to a number."""
@@ -332,7 +256,6 @@ def build_table_schema(directory: str):
     
     csv_files = Path(directory).glob('*.csv')
     csv_files = [csv_file for csv_file in csv_files]
-    table_names = [csv_file.stem for csv_file in csv_files]
     
     for csv_file in csv_files:
         # Read CSV with pandas, keeping NA values as empty strings
@@ -356,12 +279,7 @@ def build_table_schema(directory: str):
         # Calculate statistics for each column
         column_stats = {}
         for column_name, values in table_data["columns"].items():
-            _column_stats = calculate_column_stats(table_name, values, column_name, client)
-            primary_key = is_primary_key(column_name, table_name)
-            foreign_key = is_foreign_key(column_name, table_name, table_names)
-            if primary_key: _column_stats['primary_key'] = primary_key
-            if foreign_key: _column_stats['foreign_key'] = foreign_key
-            column_stats[column_name] = _column_stats
+            column_stats[column_name] = calculate_column_stats(table_name, values, column_name, client)
         
         # Prepare final schema
         schema = {
