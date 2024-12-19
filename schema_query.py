@@ -30,6 +30,11 @@ class SchemaQuerier:
             "description": "List all tables alphabetically with record counts and descriptions",
             "syntax": "python query_schema.py tables",
             "args": None
+        },
+        "table_descriptions": {
+            "description": "List all tables with their descriptions in a bullet list format",
+            "syntax": "python query_schema.py table_descriptions",
+            "args": None
         }
     }
 
@@ -179,8 +184,25 @@ class SchemaQuerier:
             "tables": tables
         }
 
+    def query_table_descriptions(self, args: List[str] = None) -> str:
+        """List all tables with their descriptions in a bullet list format"""
+        result = []
+        for table_name, schema in sorted(self.tables_schema.items()):
+            description = schema.get("description", "No description available")
+            result.append(f"• {table_name}\n  {description}\n")
+        
+        return "\n".join(result)
+
     def execute_query(self, query_id: str, args: List[str] = None) -> Any:
         """Execute a specific query by its ID"""
+        if query_id == "table_descriptions":
+            # Special handling for text output
+            return {
+                "query_id": query_id,
+                "result": self.query_table_descriptions(args),
+                "format": "text"  # Add format hint
+            }
+        
         if query_id.isdigit():
             query_method = getattr(self, f"query_{query_id}", None)
             return {
@@ -221,7 +243,12 @@ def main():
     
     try:
         result = querier.execute_query(query_id, args)
-        print(json.dumps(result, indent=2))
+        if result.get("format") == "text":
+            # Print text output directly
+            print(result["result"])
+        else:
+            # Print JSON output
+            print(json.dumps(result, indent=2))
     except Exception as e:
         print(f"Error executing query {query_id}: {str(e)}")
         print("\nFor help, run: python query_schema.py")

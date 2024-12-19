@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 from collections import Counter, defaultdict
 from typing import Dict, Set
+from datetime import datetime
+from statistics import mean, median
+from collections import Counter
 
 def analyze_csv_files(directory):
     # Track headers per file and overall counts
@@ -74,16 +77,101 @@ def calculate_overlap_stats(table_values: dict) -> dict:
     
     return overlap_stats
 
+def is_numeric(value: str) -> bool:
+    """Check if a string value can be converted to a number."""
+    try:
+        float(value)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+def is_date(value: str) -> bool:
+    """Try to parse a string as a date using common formats."""
+    date_formats = [
+        "%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y",
+        "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S"
+    ]
+    for fmt in date_formats:
+        try:
+            datetime.strptime(value.strip(), fmt)
+            return True
+        except (ValueError, AttributeError):
+            continue
+    return False
+
 def calculate_field_stats(values: list) -> dict:
-    """Calculate statistics for a field."""
+    """Calculate enhanced statistics for a field."""
     total_count = len(values)
-    non_empty_count = sum(1 for v in values if v.strip() != '')
-    return {
+    if total_count == 0:
+        return {"total_values": 0, "error": "No values present"}
+
+    # Basic counts
+    non_empty_values = [v for v in values if v.strip() != '']
+    non_empty_count = len(non_empty_values)
+    unique_values = set(values)
+    unique_count = len(unique_values)
+
+    # Value frequencies
+    value_counts = Counter(values)
+    most_common = value_counts.most_common(5)
+    
+    # Initialize stats dictionary
+    stats = {
         "total_values": total_count,
         "non_empty_values": non_empty_count,
         "non_empty_percentage": round((non_empty_count / total_count * 100), 2) if total_count > 0 else 0,
-        "unique_values": len(set(values)),
+        "unique_values": unique_count,
+        "unique_values_percentage": round((unique_count / total_count * 100), 2) if total_count > 0 else 0,
+        "null_or_empty_count": sum(1 for v in values if v.lower() in ('null', 'none', '')),
+        "whitespace_only_count": sum(1 for v in values if v.strip() == '' and v != ''),
+        "most_common_values": {str(v): c for v, c in most_common}
     }
+
+    # Length statistics - only if we have non-empty values
+    if non_empty_values:
+        lengths = [len(str(v)) for v in non_empty_values]
+        stats["length_stats"] = {
+            "min": min(lengths),
+            "max": max(lengths),
+            "average": round(mean(lengths), 2)
+        }
+    else:
+        stats["length_stats"] = {
+            "min": 0,
+            "max": 0,
+            "average": 0
+        }
+
+    # Check if values are numeric
+    numeric_values = [float(v) for v in non_empty_values if is_numeric(v)]
+    if numeric_values:  # Only add numeric stats if we have numeric values
+        stats["numeric_stats"] = {
+            "min": min(numeric_values),
+            "max": max(numeric_values),
+            "mean": round(mean(numeric_values), 2),
+            "median": round(median(numeric_values), 2)
+        }
+
+    # Check if values are dates
+    if non_empty_values:  # Only check dates if we have non-empty values
+        date_samples = [v for v in non_empty_values[:100] if is_date(v)]
+        if date_samples and len(date_samples) >= 0.5 * min(len(non_empty_values[:100]), 100):
+            dates = []
+            for v in non_empty_values:
+                for fmt in ["%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%d/%m/%Y"]:
+                    try:
+                        dates.append(datetime.strptime(v.strip(), fmt))
+                        break
+                    except (ValueError, AttributeError):
+                        continue
+            if dates:
+                stats["date_stats"] = {
+                    "min_date": min(dates).strftime("%Y-%m-%d"),
+                    "max_date": max(dates).strftime("%Y-%m-%d"),
+                    "distinct_years": len({d.year for d in dates})
+                }
+
+    return stats
 
 def build_column_schema(directory: str):
     # Dictionary to store column information
